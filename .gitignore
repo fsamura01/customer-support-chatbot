@@ -1,0 +1,25 @@
+# OS temporary files
+**/.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+env/
+
+# Evaluation output datasets
+*.jsonl
+
+# Project specific
+**/planning.md
+lesson-4-prompt-refinement/demos/demo3-evals/eval_responses.jsonl
+demo_guides/*
+scripts/*
+walkthrough.md
+instructions.md
+implementation_plan.md
