@@ -67,60 +67,162 @@ Resources:
           from datetime import datetime, timezone
           import boto3
 
-          table = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+          table = boto3.resource("dynamodb").Table(
+            os.environ["TABLE_NAME"]
+          )
 
-          REQUIRED_FIELDS = ("description", "stepsToReproduce", "environment")
 
           def lambda_handler(event, _):
-              print("EVENT:", json.dumps(event, indent=2, default=str))
+            print("EVENT:", json.dumps(event, indent=2, default=str))
 
-              if event.get("messageVersion") != "1.0" or event.get("function") != "create_bug_report":
-                  return _resp(event, {"error": "unsupported"})
+            try:
+                # =========================================================
+                # 1. GET INPUT
+                #
+                # Bedrock Flow:
+                # event["node"]["inputs"][0]["value"]
+                #
+                # Lambda Console test:
+                # event["description"]
+                # =========================================================
 
-              params = event.get("parameters") or []
-              body = {
-                  p.get("name"): p.get("value")
-                  for p in params
-                  if isinstance(p, dict) and p.get("name") is not None
-              }
+                if "node" in event:
+                    node = event.get("node", {})
+                    inputs = node.get("inputs", [])
 
-              description = (body.get("description") or "").strip()
-              steps = (body.get("stepsToReproduce") or "").strip()
-              environment = (body.get("environment") or "").strip()
+                    if not inputs:
+                        raise ValueError(
+                            "No inputs received from Bedrock Flow"
+                        )
 
-              if not description:
-                  return _resp(event, {"error": "missing", "field": "description"})
+                    code_hook_input = None
 
-              ticket_id = str(uuid.uuid4())
-              item = {
-                  "ticketId": ticket_id,
-                  "description": description,
-                  "stepsToReproduce": steps,
-                  "environment": environment,
-                  "status": "OPEN",
-                  "createdAt": datetime.now(timezone.utc).isoformat(),
-              }
+                    for item in inputs:
+                        if item.get("name") == "codeHookInput":
+                            code_hook_input = item.get("value")
+                            break
 
-              table.put_item(Item=item)
+                    if code_hook_input is None:
+                        raise ValueError(
+                            "codeHookInput was not found in node inputs"
+                        )
 
-              return _resp(event, {"ticketId": ticket_id, "status": "OPEN"})
+                    print(
+                        "CODE HOOK INPUT:",
+                        repr(code_hook_input)
+                    )
 
+                    # Bedrock Flow provides the value as a STRING.
+                    # CollectBugInfo now returns clean JSON.
+                    if isinstance(code_hook_input, str):
+                        body = json.loads(code_hook_input)
+                    else:
+                        body = code_hook_input
 
-          def _resp(event, obj):
-              return {
-                  "messageVersion": "1.0",
-                  "response": {
-                      "actionGroup": event.get("actionGroup"),
-                      "function": event.get("function"),
-                      "functionResponse": {
-                          "responseBody": {
-                              "TEXT": {
-                                  "body": json.dumps(obj)
-                              }
-                          }
-                      },
-                  },
-              }
+                else:
+                    # Direct Lambda Console test event
+                    body = event
+
+                print(
+                    "PARSED BODY:",
+                    json.dumps(body, indent=2, default=str)
+                    )
+
+                # =========================================================
+                # 2. VALIDATE INPUT
+                # =========================================================
+
+                if not isinstance(body, dict):
+                    raise ValueError(
+                        f"Expected JSON object, got {type(body).__name__}"
+                    )
+
+                description = (
+                    body.get("description") or ""
+                ).strip()
+
+                steps = (
+                    body.get("stepsToReproduce") or ""
+                ).strip()
+
+                environment = (
+                    body.get("environment") or ""
+                ).strip()
+
+                print("DESCRIPTION:", description)
+                print("STEPS:", steps)
+                print("ENVIRONMENT:", environment)
+
+                if not description:
+                    return json.dumps({
+                        "status": "ERROR",
+                        "error": "missing",
+                        "field": "description"
+                    })
+
+                # =========================================================
+                # 3. CREATE BUG REPORT
+                # =========================================================
+
+                ticket_id = str(uuid.uuid4())
+
+                item = {
+                    "ticketId": ticket_id,
+                    "description": description,
+                    "stepsToReproduce": steps,
+                    "environment": environment,
+                    "status": "OPEN",
+                    "createdAt": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                }
+
+                table.put_item(Item=item)
+
+                print(
+                    "DYNAMODB ITEM:",
+                    json.dumps(item, indent=2, default=str)
+                )
+
+                # =========================================================
+                # 4. RETURN RESULT
+                #
+                # IMPORTANT:
+                # Bedrock Flow expects the Lambda result to be a String.
+                #
+                # Do NOT return the Agent-style:
+                #
+                # {
+                #   "messageVersion": "1.0",
+                #   "response": {
+                #       "functionResponse": ...
+                #   }
+                # }
+                # =========================================================
+
+                result = {
+                    "ticketId": ticket_id,
+                    "status": "OPEN"
+                }
+
+                print(
+                    "RESULT:",
+                    json.dumps(result)
+                )
+
+                return json.dumps(result)
+
+            except Exception as exc:
+                print(
+                    "ERROR:",
+                    type(exc).__name__,
+                    str(exc)
+                )
+
+                return json.dumps({
+                    "status": "ERROR",
+                    "error": str(exc)
+                })
 
   BedrockInvokePermission:
     Type: AWS::Lambda::Permission
